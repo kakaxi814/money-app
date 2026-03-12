@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>公费池 · 精确版+余额通知</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+        body { font-family: 'Noto Sans SC', system-ui, sans-serif; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .modal { animation: modalPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+        @keyframes modalPop { from { opacity: 0; transform: scale(0.92) translateY(20px); } }
+        .toast { animation: toastIn 0.3s, toastOut 0.3s 2.7s forwards; }
+        @keyframes toastIn { from { transform: translateY(50px); opacity: 0; } }
+        .bottom-nav { padding-bottom: env(safe-area-inset-bottom); }
+        .card-hover { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .pending-pulse { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.5); animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.5); } 70% { box-shadow: 0 0 0 12px rgba(168, 85, 247, 0); } 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, 0); } }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen pb-safe">
+
+<!-- Loading -->
+<div id="loading-screen" class="fixed inset-0 bg-white flex items-center justify-center z-[999]">
+    <div class="text-center">
+        <div class="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p class="text-gray-500 font-medium">连接实时数据库...</p>
+    </div>
+</div>
+
+<!-- 主应用 -->
+<div id="main-app" class="min-h-screen flex flex-col hidden">
+
+    <!-- Header -->
+    <div class="bg-white shadow-sm p-4 sticky top-0 z-10 border-b">
+        <h1 class="text-2xl font-bold text-center text-indigo-600 tracking-tight">动态公费资金池</h1>
+        <div id="current-admin" class="text-center text-xs text-emerald-600 mt-1 font-medium"></div>
+    </div>
+
+    <!-- Content -->
+    <div class="flex-1 p-4 max-w-lg mx-auto w-full overflow-auto pb-28">
+
+        <!-- DASHBOARD -->
+        <div id="dashboard-tab" class="tab-content active space-y-6">
+            <div class="bg-gradient-to-br from-indigo-500 via-purple-600 to-violet-600 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden card-hover">
+                <div class="relative z-10">
+                    <h2 class="text-sm font-medium opacity-90">公费池当前水位</h2>
+                    <div id="pool-balance" class="text-6xl font-bold tracking-tighter mt-1 mb-6">0.00</div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button onclick="showExpenseModal()" class="bg-white/20 hover:bg-white/30 py-3.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-2 transition">
+                            <i class="fa-solid fa-arrow-up"></i> 记支出
+                        </button>
+                        <button onclick="showRoundModal()" class="bg-white text-indigo-700 hover:bg-indigo-50 py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-inner">
+                            <i class="fa-solid fa-rotate"></i> 发起拼钱
+                        </button>
+                        <button onclick="showPadModal()" class="bg-white/20 hover:bg-white/30 py-3.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-2 transition">
+                            <i class="fa-solid fa-hand-holding-heart"></i> 记录垫付
+                        </button>
+                        <button onclick="showReimburseModal()" id="reimburse-btn" class="bg-white/20 hover:bg-white/30 py-3.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-2 transition hidden">
+                            <i class="fa-solid fa-hand-holding-dollar"></i> 管理员报销
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 待报销垫付卡片（仅管理员可见） -->
+            <div id="pending-pad-card" class="bg-orange-50 border-2 border-orange-300 rounded-3xl p-5 shadow-md pending-pulse hidden">
+                <div class="flex items-center gap-3 text-orange-700 mb-3">
+                    <i class="fa-solid fa-circle-exclamation text-2xl"></i>
+                    <h3 class="font-bold text-lg">待报销垫付 ⏳</h3>
+                </div>
+                <div id="pending-pad-list" class="space-y-3 max-h-48 overflow-y-auto">
+                    <!-- 动态渲染 -->
+                </div>
+                <p class="text-xs text-orange-500 mt-2 italic">管理员可点击“报销”快速处理</p>
+            </div>
+
+            <div class="bg-white rounded-3xl p-6 shadow-sm">
+                <h3 class="flex items-center gap-2 text-sm font-bold text-gray-500 mb-4">
+                    <i class="fa-solid fa-chart-pie"></i> 支出类目概览（累计）
+                </h3>
+                <div id="expenses-list" class="space-y-4 text-sm"></div>
+            </div>
+        </div>
+
+        <!-- MEMBERS -->
+        <div id="members-tab" class="tab-content space-y-5">
+            <div class="bg-amber-50 border border-amber-200 p-4 rounded-3xl text-xs flex gap-3">
+                <i class="fa-solid fa-info-circle mt-0.5 text-amber-500"></i>
+                <p>结余 = 实际已缴 − 累计应缴<br>池欠你 = 尚未报销的垫付金额</p>
+            </div>
+            <div id="members-list" class="space-y-4"></div>
+        </div>
+
+        <!-- HISTORY -->
+        <div id="history-tab" class="tab-content space-y-4">
+            <div id="history-list" class="space-y-4"></div>
+        </div>
+
+        <!-- SETTINGS -->
+        <div id="settings-tab" class="tab-content">
+            <div class="bg-white rounded-3xl p-6 shadow-sm space-y-8">
+                <!-- 成员名称 -->
+                <div>
+                    <h3 class="font-bold text-lg mb-5 border-b pb-3">成员名称设置</h3>
+                    <div id="users-container" class="space-y-5"></div>
+                </div>
+
+                <!-- 管理员 & 我的身份 -->
+                <div class="grid grid-cols-2 gap-6">
+                    <div>
+                        <h3 class="font-bold text-sm mb-3">管理员设置</h3>
+                        <select id="admin-select" onchange="updateAdmin()" class="w-full border-2 rounded-2xl px-5 py-4 text-base"></select>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm mb-3">我的身份（本地保存）</h3>
+                        <select id="myname-select" onchange="setMyName()" class="w-full border-2 rounded-2xl px-5 py-4 text-base"></select>
+                    </div>
+                </div>
+
+                <!-- Telegram -->
+                <div>
+                    <h3 class="font-bold text-lg mb-5 border-b pb-3 flex items-center gap-2">
+                        <i class="fa-solid fa-paper-plane text-blue-500"></i> Telegram 群通知配置
+                    </h3>
+                    <div class="space-y-5">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Bot Token</label>
+                            <input id="tg-token" type="text" class="w-full border-2 rounded-2xl px-5 py-4 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="123456:ABC...">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">群组 Chat ID</label>
+                            <input id="tg-chatid" type="text" class="w-full border-2 rounded-2xl px-5 py-4 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="-1001234567890">
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="saveConfig()" class="w-full bg-indigo-600 hover:bg-indigo-700 transition py-4 rounded-3xl text-white font-bold text-lg shadow-lg">
+                    保存并同步给所有人
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Navigation -->
+    <div class="fixed bottom-0 left-0 right-0 bg-white border-t z-50 bottom-nav shadow-2xl">
+        <div class="max-w-lg mx-auto grid grid-cols-4 text-[10px]">
+            <button onclick="switchTab('dashboard')" class="tab-btn flex flex-col items-center py-3 text-indigo-600 active">
+                <i class="fa-solid fa-house text-2xl mb-1"></i><span>看盘</span>
+            </button>
+            <button onclick="switchTab('members')" class="tab-btn flex flex-col items-center py-3 text-gray-400">
+                <i class="fa-solid fa-users text-2xl mb-1"></i><span>成员</span>
+            </button>
+            <button onclick="switchTab('history')" class="tab-btn flex flex-col items-center py-3 text-gray-400">
+                <i class="fa-solid fa-list text-2xl mb-1"></i><span>明细</span>
+            </button>
+            <button onclick="switchTab('settings')" class="tab-btn flex flex-col items-center py-3 text-gray-400">
+                <i class="fa-solid fa-gear text-2xl mb-1"></i><span>设置</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 所有模态框 ==================== -->
+
+<!-- 记支出 Modal -->
+<div id="expense-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">记一笔支出</h3>
+            <p class="text-xs text-gray-500 mb-6">从公费池直接扣款</p>
+            <form id="expense-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">金额（元）</label>
+                    <input id="expense-amount" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5">
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">分类</label>
+                    <select id="expense-category" class="w-full border-2 rounded-2xl px-6 py-5 text-base">
+                        <option value="买菜">买菜</option><option value="电费">电费</option>
+                        <option value="网费">网费</option><option value="生活用品">生活用品</option>
+                        <option value="聚餐娱乐">聚餐娱乐</option><option value="其他">其他</option>
+                    </select>
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注</label>
+                    <input id="expense-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="买菜/交通">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closeExpenseModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-red-500 text-white rounded-2xl font-bold">确认支出</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 发起拼钱 Modal (修复每人金额逻辑) -->
+<div id="round-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">发起新一轮拼钱</h3>
+            <p class="text-xs text-gray-500 mb-6">每人预缴相同金额，增加公费池</p>
+            <form id="round-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">每人金额（元）</label>
+                    <input id="round-per-person" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5" oninput="updateRoundTotal()">
+                    <p class="text-right text-sm mt-2 text-gray-500">共 <span id="member-count">4</span> 人，总计 <span id="round-total">0.00</span> 元</p>
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注 (可选)</label>
+                    <input id="round-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="3月生活费">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closeRoundModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold">发起</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 入账 Modal (成员缴款) -->
+<div id="payment-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">成员入账</h3>
+            <p class="text-xs text-gray-500 mb-6">向公费池缴纳预付款</p>
+            <form id="payment-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">缴款人</label>
+                    <select id="payment-user" class="w-full border-2 rounded-2xl px-6 py-5 text-base"></select>
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">金额（元）</label>
+                    <input id="payment-amount" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5">
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注</label>
+                    <input id="payment-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="预缴3月">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closePaymentModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold">确认入账</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 退款 Modal (管理员退给成员) -->
+<div id="refund-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">退款给成员</h3>
+            <p class="text-xs text-gray-500 mb-6">从公费池退还多缴款项</p>
+            <form id="refund-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">退款给</label>
+                    <select id="refund-user" class="w-full border-2 rounded-2xl px-6 py-5 text-base"></select>
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">金额（元）</label>
+                    <input id="refund-amount" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5">
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注</label>
+                    <input id="refund-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="退多缴">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closeRefundModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-amber-600 text-white rounded-2xl font-bold">确认退款</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 记录垫付 Modal -->
+<div id="pad-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">记录垫付</h3>
+            <p class="text-xs text-gray-500 mb-6">出门先垫 → 回家再找管理员报销</p>
+            <form id="pad-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">垫付人</label>
+                    <select id="pad-user" class="w-full border-2 rounded-2xl px-6 py-5 text-base"></select>
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">垫付金额（元）</label>
+                    <input id="pad-amount" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5">
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">分类</label>
+                    <select id="pad-category" class="w-full border-2 rounded-2xl px-6 py-5 text-base">
+                        <option value="买菜">买菜</option><option value="电费">电费</option>
+                        <option value="网费">网费</option><option value="生活用品">生活用品</option>
+                        <option value="聚餐娱乐">聚餐娱乐</option><option value="其他">其他</option>
+                    </select>
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注</label>
+                    <input id="pad-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="出门买菜垫付">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closePadModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-violet-600 text-white rounded-2xl font-bold">确认记录垫付</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 管理员报销 Modal -->
+<div id="reimburse-modal" class="fixed inset-0 bg-black/70 hidden flex items-center justify-center p-4 z-[999]">
+    <div class="bg-white rounded-3xl w-full max-w-sm modal">
+        <div class="p-6">
+            <h3 class="text-xl font-bold mb-2">管理员报销垫付</h3>
+            <p class="text-xs text-gray-500 mb-6">从公费池直接还给垫付人</p>
+            <form id="reimburse-form">
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">报销给谁</label>
+                    <select id="reimb-user" class="w-full border-2 rounded-2xl px-6 py-5 text-base"></select>
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">报销金额（元）</label>
+                    <input id="reimb-amount" type="number" step="0.01" required class="w-full text-4xl font-semibold border-2 rounded-2xl px-6 py-5">
+                </div>
+                <div class="mb-5">
+                    <label class="block text-xs text-gray-500 mb-2">分类</label>
+                    <select id="reimb-category" class="w-full border-2 rounded-2xl px-6 py-5 text-base">
+                        <option value="买菜">买菜</option><option value="电费">电费</option>
+                        <option value="网费">网费</option><option value="生活用品">生活用品</option>
+                        <option value="聚餐娱乐">聚餐娱乐</option><option value="其他">其他</option>
+                    </select>
+                </div>
+                <div class="mb-8">
+                    <label class="block text-xs text-gray-500 mb-2">备注</label>
+                    <input id="reimb-note" type="text" class="w-full border-2 rounded-2xl px-6 py-5" placeholder="报销上周垫付">
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="closeReimburseModal()" class="flex-1 py-4 bg-gray-100 rounded-2xl font-medium">取消</button>
+                    <button type="submit" class="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold">确认从公费报销</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast-container" class="fixed bottom-20 left-1/2 -translate-x-1/2 z-[9999]"></div>
+
+<script type="module">
+    // ====================== Firebase ======================
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js";
+    import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyCQfKYcWSby0YHRUbULcfCjCylpMHADZtQ",
+        authDomain: "money888-3b541.firebaseapp.com",
+        projectId: "money888-3b541",
+        storageBucket: "money888-3b541.firebasestorage.app",
+        messagingSenderId: "976127257876",
+        appId: "1:976127257876:web:b1130ae88b5596b3616601",
+        measurementId: "G-K904DJ6NG7"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const APP_ID = "shared-fund-pool";
+
+    // ====================== 全局状态 ======================
+    let records = [];
+    let config = { 
+        users: ["成员A", "成员B", "成员C", "成员D"], 
+        tgToken: "", 
+        tgChatId: "",
+        adminUser: "成员A"
+    };
+    let myName = localStorage.getItem("myName") || "成员A";
+    let poolBalance = 0;
+    let userBalances = [];      // 包含 name, balance, expected, padOwed
+    let padOwedMap = {};
+    let expensesByCategory = {};
+
+    // ====================== Toast ======================
+    function showToast(msg, type = "success") {
+        const container = document.getElementById("toast-container");
+        const toast = document.createElement("div");
+        toast.className = `toast px-6 py-3.5 rounded-3xl text-white font-medium shadow-2xl flex items-center gap-3 ${type === "success" ? "bg-emerald-500" : "bg-red-500"}`;
+        toast.innerHTML = `<i class="fa-solid ${type === "success" ? "fa-check-circle" : "fa-xmark"}"></i> ${msg}`;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    // ====================== 计算逻辑（修复每人应缴） ======================
+    function computeBalances() {
+        let poolBal = 0;
+        const balances = {};           // 实际贡献
+        const personalExpected = {};   // 每人应缴累计
+        const catMap = {};
+        padOwedMap = {};
+
+        config.users.forEach(u => {
+            balances[u] = 0;
+            personalExpected[u] = 0;
+            padOwedMap[u] = 0;
+        });
+
+        records.forEach(r => {
+            const amt = Number(r.amount);
+            if (r.type === "round") {
+                // 计算每人应缴：优先使用存储的 perPerson，否则用总金额/当前人数（兼容旧数据）
+                let perPerson = r.perPerson;
+                if (!perPerson && r.memberCount) {
+                    perPerson = amt / r.memberCount;
+                } else if (!perPerson) {
+                    // 极旧数据，按当前人数估算（会有偏差，但至少不崩溃）
+                    perPerson = amt / config.users.length;
+                }
+                // 为每个成员增加应缴
+                config.users.forEach(u => {
+                    personalExpected[u] += perPerson;
+                });
+            } else if (r.type === "contribution") {
+                poolBal += amt;
+                if (balances[r.userId] !== undefined) balances[r.userId] += amt;
+            } else if (r.type === "expense") {
+                poolBal -= amt;
+                catMap[r.category] = (catMap[r.category] || 0) + amt;
+            } else if (r.type === "refund") {
+                poolBal -= amt;
+                if (balances[r.userId] !== undefined) balances[r.userId] -= amt;
+            } else if (r.type === "pad") {
+                padOwedMap[r.userId] = (padOwedMap[r.userId] || 0) + amt;
+                catMap[r.category] = (catMap[r.category] || 0) + amt;
+            } else if (r.type === "reimbursement") {
+                poolBal -= amt;
+                padOwedMap[r.userId] = (padOwedMap[r.userId] || 0) - amt;
+                catMap[r.category] = (catMap[r.category] || 0) + amt;
+            }
+        });
+
+        userBalances = config.users.map(name => ({
+            name,
+            balance: (balances[name] || 0) - (personalExpected[name] || 0),
+            expected: personalExpected[name] || 0,
+            padOwed: padOwedMap[name] || 0
+        }));
+
+        poolBalance = poolBal;
+        expensesByCategory = catMap;
+    }
+
+    // ====================== Telegram (附带当前余额) ======================
+    async function sendTelegramMsg(text, newBalance) {
+        if (!config.tgToken || !config.tgChatId) return;
+        const balance = (newBalance !== undefined) ? newBalance : poolBalance;
+        const fullText = `${text}\n\n💰 当前公费余额：${balance.toFixed(2)} 元`;
+        try {
+            await fetch(`https://api.telegram.org/bot${config.tgToken}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: config.tgChatId, text: fullText })
+            });
+        } catch (e) {}
+    }
+
+    // ====================== 渲染 ======================
+    function renderDashboard() {
+        document.getElementById("pool-balance").textContent = Number(poolBalance).toFixed(2);
+        
+        // 支出类目
+        const list = document.getElementById("expenses-list");
+        if (Object.keys(expensesByCategory).length === 0) {
+            list.innerHTML = `<div class="text-center py-10 text-gray-400">暂无支出</div>`;
+        } else {
+            let html = "";
+            Object.entries(expensesByCategory).sort(([,a],[,b]) => b-a).forEach(([cat, amt]) => {
+                html += `<div class="flex justify-between items-center py-2 border-b last:border-none"><div class="flex items-center gap-3"><span class="w-3 h-3 bg-indigo-500 rounded-full"></span><span>${cat}</span></div><span class="font-semibold text-lg">¥${Number(amt).toFixed(2)}</span></div>`;
+            });
+            list.innerHTML = html;
+        }
+
+        // 待报销垫付卡片 (仅管理员且有待报销时显示)
+        const isAdmin = myName === config.adminUser;
+        const pendingPad = Object.entries(padOwedMap).filter(([,amt]) => amt > 0);
+        const card = document.getElementById("pending-pad-card");
+        const listEl = document.getElementById("pending-pad-list");
+        if (isAdmin && pendingPad.length) {
+            card.classList.remove("hidden");
+            let html = '';
+            pendingPad.forEach(([user, amt]) => {
+                html += `<div class="flex justify-between items-center bg-white p-3 rounded-2xl border border-orange-200">
+                    <div><span class="font-bold">${user}</span> <span class="text-orange-600 font-semibold">¥${amt.toFixed(2)}</span></div>
+                    <button onclick="quickReimburse('${user}')" class="bg-orange-500 text-white px-4 py-2 rounded-xl text-xs font-bold"><i class="fa-solid fa-hand-holding-dollar"></i> 报销</button>
+                </div>`;
+            });
+            listEl.innerHTML = html;
+        } else {
+            card.classList.add("hidden");
+        }
+    }
+
+    function renderMembers() {
+        const container = document.getElementById("members-list");
+        let html = "";
+        userBalances.forEach(u => {
+            const color = u.balance < 0 ? "text-red-500" : u.balance > 0 ? "text-emerald-500" : "text-gray-700";
+            const sign = u.balance > 0 ? "+" : "";
+            let btns = `<button onclick="openPaymentModal('${u.name}')" class="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-2xl text-sm flex items-center justify-center gap-2"><i class="fa-solid fa-arrow-down text-emerald-500"></i>入账</button>`;
+            if (u.balance > 0) btns += `<button onclick="openRefundModal('${u.name}')" class="flex-1 py-3 bg-gray-100 hover:bg-gray-200 rounded-2xl text-sm flex items-center justify-center gap-2"><i class="fa-solid fa-hand-holding-dollar"></i>退款</button>`;
+            else if (u.balance < 0) btns += `<button onclick="remindUser('${u.name}')" class="flex-1 py-3 bg-red-100 hover:bg-red-200 text-red-600 rounded-2xl text-sm flex items-center justify-center gap-2"><i class="fa-solid fa-paper-plane"></i>催款</button>`;
+
+            html += `
+                <div class="bg-white rounded-3xl p-6 shadow card-hover">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h3 class="text-2xl font-bold">${u.name}</h3>
+                            <p class="text-xs text-gray-400">应缴：${u.expected.toFixed(2)}</p>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs text-gray-400 mb-1">结余</div>
+                            <div class="text-4xl font-bold ${color}">${sign}${u.balance.toFixed(2)}</div>
+                            ${u.padOwed > 0 ? `<div class="text-xs text-violet-600 mt-2">池欠你：+${u.padOwed.toFixed(2)}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="flex gap-3 mt-8">${btns}</div>
+                </div>`;
+        });
+        container.innerHTML = html;
+    }
+
+    function renderHistory() {
+        const container = document.getElementById("history-list");
+        if (records.length === 0) {
+            container.innerHTML = `<div class="text-center py-20 text-gray-400">暂无记录</div>`;
+            return;
+        }
+        let html = "";
+        records.forEach(r => {
+            let color = "#22c55e", txt = "", sign = "+", amtColor = "text-emerald-500";
+            if (r.type === "expense") { color = "#ef4444"; txt = `支出 - ${r.category}`; sign = "-"; amtColor = "text-red-500"; }
+            else if (r.type === "round") { color = "#8b5cf6"; txt = "🔄 新一轮拼钱"; sign = ""; amtColor = "text-purple-500"; }
+            else if (r.type === "contribution") { txt = `入款 - ${r.userId}`; }
+            else if (r.type === "refund") { color = "#f59e0b"; txt = `退款给 ${r.userId}`; sign = "-"; amtColor = "text-red-500"; }
+            else if (r.type === "pad") { color = "#a855f7"; txt = `垫付 - ${r.category}（${r.userId}）`; sign = ""; amtColor = "text-violet-500"; }
+            else if (r.type === "reimbursement") { color = "#10b981"; txt = `管理员报销给 ${r.userId}（${r.category}）`; sign = "-"; amtColor = "text-emerald-500"; }
+
+            html += `
+                <div class="bg-white rounded-3xl p-5 shadow flex justify-between border-l-4" style="border-left-color:${color}">
+                    <div class="flex-1">
+                        <div class="font-semibold">${txt}</div>
+                        <div class="text-xs text-gray-400 mt-1">${new Date(r.timestamp).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} ${r.note ? '· '+r.note : ''}</div>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="font-bold text-2xl ${amtColor}">${sign}${Number(r.amount).toFixed(0)}</span>
+                        <button onclick="deleteRecord('${r.id}')" class="text-gray-300 hover:text-red-500"><i class="fa-solid fa-trash text-xl"></i></button>
+                    </div>
+                </div>`;
+        });
+        container.innerHTML = html;
+    }
+
+    function renderAll() {
+        renderDashboard();
+        renderMembers();
+        renderHistory();
+    }
+
+    function updateConfigUI() {
+        const container = document.getElementById("users-container");
+        let html = "";
+        config.users.forEach((name, i) => {
+            html += `
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">成员 ${i+1}</label>
+                    <input id="user-name-${i}" type="text" value="${name}" class="w-full border-2 rounded-2xl px-5 py-4 focus:border-indigo-500">
+                </div>`;
+        });
+        container.innerHTML = html;
+        for (let i = 0; i < config.users.length; i++) {
+            const el = document.getElementById(`user-name-${i}`);
+            if (el) el.addEventListener("input", () => config.users[i] = el.value.trim());
+        }
+
+        document.getElementById("admin-select").innerHTML = config.users.map(u => `<option value="${u}" ${u === config.adminUser ? 'selected' : ''}>${u}</option>`).join('');
+        document.getElementById("myname-select").innerHTML = config.users.map(u => `<option value="${u}" ${u === myName ? 'selected' : ''}>${u}</option>`).join('');
+        document.getElementById("tg-token").value = config.tgToken || "";
+        document.getElementById("tg-chatid").value = config.tgChatId || "";
+        document.getElementById("member-count").textContent = config.users.length;
+    }
+
+    function checkAdminAndUpdateUI() {
+        const isAdmin = myName === config.adminUser;
+        document.getElementById("reimburse-btn").classList.toggle("hidden", !isAdmin);
+        document.getElementById("current-admin").textContent = isAdmin ? "您是管理员" : `管理员：${config.adminUser}`;
+        renderDashboard(); // 重新渲染待办卡片
+    }
+
+    // ====================== 模态框控制 ======================
+    window.switchTab = function(tab) {
+        document.querySelectorAll(".tab-content").forEach(el => el.classList.remove("active"));
+        document.getElementById(tab + "-tab").classList.add("active");
+        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("text-indigo-600"));
+        const active = Array.from(document.querySelectorAll(".tab-btn")).find(btn => btn.getAttribute("onclick").includes(tab));
+        if (active) active.classList.add("text-indigo-600");
+    };
+
+    // 记支出
+    window.showExpenseModal = () => document.getElementById("expense-modal").classList.remove("hidden");
+    window.closeExpenseModal = () => {
+        document.getElementById("expense-modal").classList.add("hidden");
+        document.getElementById("expense-form").reset();
+    };
+
+    // 发起拼钱
+    window.showRoundModal = () => {
+        document.getElementById("round-modal").classList.remove("hidden");
+        updateRoundTotal();
+    };
+    window.closeRoundModal = () => {
+        document.getElementById("round-modal").classList.add("hidden");
+        document.getElementById("round-form").reset();
+    };
+    window.updateRoundTotal = function() {
+        const per = parseFloat(document.getElementById("round-per-person").value) || 0;
+        const total = per * config.users.length;
+        document.getElementById("round-total").textContent = total.toFixed(2);
+    };
+
+    // 入账
+    window.openPaymentModal = (userName) => {
+        const select = document.getElementById("payment-user");
+        select.innerHTML = config.users.map(u => `<option value="${u}">${u}</option>`).join('');
+        if (userName) select.value = userName;
+        document.getElementById("payment-modal").classList.remove("hidden");
+    };
+    window.closePaymentModal = () => {
+        document.getElementById("payment-modal").classList.add("hidden");
+        document.getElementById("payment-form").reset();
+    };
+
+    // 退款
+    window.openRefundModal = (userName) => {
+        const select = document.getElementById("refund-user");
+        select.innerHTML = config.users.map(u => `<option value="${u}">${u}</option>`).join('');
+        if (userName) select.value = userName;
+        document.getElementById("refund-modal").classList.remove("hidden");
+    };
+    window.closeRefundModal = () => {
+        document.getElementById("refund-modal").classList.add("hidden");
+        document.getElementById("refund-form").reset();
+    };
+
+    // 垫付 (管理员可自由选择，普通成员锁定自己)
+    window.showPadModal = () => {
+        const select = document.getElementById("pad-user");
+        select.innerHTML = config.users.map(u => `<option value="${u}">${u}</option>`).join('');
+        if (myName === config.adminUser) {
+            select.value = myName;        // 默认管理员自己
+            select.disabled = false;       // 允许修改
+        } else {
+            select.value = myName;          // 普通成员只能自己
+            select.disabled = true;          // 不可修改
+        }
+        document.getElementById("pad-modal").classList.remove("hidden");
+    };
+    window.closePadModal = () => {
+        document.getElementById("pad-modal").classList.add("hidden");
+        document.getElementById("pad-form").reset();
+    };
+
+    // 管理员报销
+    window.showReimburseModal = () => {
+        if (myName !== config.adminUser) { showToast("仅管理员可操作报销", "error"); return; }
+        const select = document.getElementById("reimb-user");
+        select.innerHTML = config.users.map(u => `<option value="${u}">${u}</option>`).join('');
+        document.getElementById("reimburse-modal").classList.remove("hidden");
+    };
+    window.closeReimburseModal = () => {
+        document.getElementById("reimburse-modal").classList.add("hidden");
+        document.getElementById("reimburse-form").reset();
+    };
+    // 快捷报销
+    window.quickReimburse = (user) => {
+        if (myName !== config.adminUser) { showToast("仅管理员可报销", "error"); return; }
+        const select = document.getElementById("reimb-user");
+        select.innerHTML = config.users.map(u => `<option value="${u}">${u}</option>`).join('');
+        select.value = user;
+        document.getElementById("reimburse-modal").classList.remove("hidden");
+    };
+
+    // ====================== 表单提交（含余额计算） ======================
+    async function handleExpense(e) {
+        e.preventDefault();
+        const amt = parseFloat(document.getElementById("expense-amount").value);
+        if (!amt) return;
+        const category = document.getElementById("expense-category").value;
+        const note = document.getElementById("expense-note").value || "支出";
+        const newBalance = poolBalance - amt;  // 预估新余额
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "expense", amount: amt, category, note,
+            timestamp: Date.now()
+        });
+        closeExpenseModal();
+        showToast("支出已记录");
+        sendTelegramMsg(`💸 公费支出 ${amt} 元（分类：${category}，备注：${note}）`, newBalance);
+    }
+
+    async function handleRound(e) {
+        e.preventDefault();
+        const per = parseFloat(document.getElementById("round-per-person").value);
+        if (!per) return;
+        const total = per * config.users.length;
+        const note = document.getElementById("round-note").value || "新拼钱";
+        const newBalance = poolBalance; // 拼钱本身不改变余额，只是增加应缴，所以余额不变
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "round", 
+            amount: total,
+            perPerson: per,               // 关键：存储每人金额
+            memberCount: config.users.length,
+            note,
+            timestamp: Date.now()
+        });
+        closeRoundModal();
+        showToast(`发起拼钱，每人 ${per} 元`);
+        sendTelegramMsg(`💰 发起拼钱：每人 ${per} 元，总计 ${total} 元（备注：${note}）`, newBalance);
+    }
+
+    async function handlePayment(e) {
+        e.preventDefault();
+        const amt = parseFloat(document.getElementById("payment-amount").value);
+        if (!amt) return;
+        const user = document.getElementById("payment-user").value;
+        const note = document.getElementById("payment-note").value || "入账";
+        const newBalance = poolBalance + amt;
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "contribution", userId: user, amount: amt, note,
+            timestamp: Date.now()
+        });
+        closePaymentModal();
+        showToast(`${user} 入账 ${amt} 元`);
+        sendTelegramMsg(`📥 ${user} 缴款 ${amt} 元（备注：${note}）`, newBalance);
+    }
+
+    async function handleRefund(e) {
+        e.preventDefault();
+        const amt = parseFloat(document.getElementById("refund-amount").value);
+        if (!amt) return;
+        const user = document.getElementById("refund-user").value;
+        const note = document.getElementById("refund-note").value || "退款";
+        const newBalance = poolBalance - amt;
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "refund", userId: user, amount: amt, note,
+            timestamp: Date.now()
+        });
+        closeRefundModal();
+        showToast(`退款 ${amt} 元给 ${user}`);
+        sendTelegramMsg(`↩️ 退款 ${amt} 元给 ${user}（备注：${note}）`, newBalance);
+    }
+
+    async function handlePad(e) {
+        e.preventDefault();
+        const amt = parseFloat(document.getElementById("pad-amount").value);
+        if (!amt) return;
+        const user = document.getElementById("pad-user").value;
+        const category = document.getElementById("pad-category").value;
+        const note = document.getElementById("pad-note").value || "垫付";
+        const newBalance = poolBalance; // 垫付不改变余额
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "pad", userId: user, amount: amt, category, note,
+            timestamp: Date.now()
+        });
+        closePadModal();
+        showToast("垫付已记录");
+        sendTelegramMsg(`📝 ${user} 记录垫付 ${amt} 元（分类：${category}，备注：${note}）`, newBalance);
+    }
+
+    async function handleReimburse(e) {
+        e.preventDefault();
+        const amt = parseFloat(document.getElementById("reimb-amount").value);
+        if (!amt) return;
+        const user = document.getElementById("reimb-user").value;
+        const category = document.getElementById("reimb-category").value;
+        const note = document.getElementById("reimb-note").value || "报销垫付";
+        const newBalance = poolBalance - amt;
+        await addDoc(collection(db, "artifacts", APP_ID, "public", "data", "pool_records"), {
+            type: "reimbursement", userId: user, amount: amt, category, note,
+            timestamp: Date.now()
+        });
+        closeReimburseModal();
+        showToast("公费已报销");
+        sendTelegramMsg(`✅ 管理员已从公费报销 ${amt} 元给 ${user}（分类：${category}，备注：${note}）`, newBalance);
+    }
+
+    window.deleteRecord = async (id) => {
+        if (!confirm("确认删除？")) return;
+        await deleteDoc(doc(db, "artifacts", APP_ID, "public", "data", "pool_records", id));
+        showToast("记录已删除");
+    };
+
+    window.remindUser = (name) => {
+        const u = userBalances.find(x => x.name === name);
+        if (!u) return;
+        sendTelegramMsg(`🚨 催款 @${name} 欠费 ${Math.abs(u.balance)} 元`, poolBalance);
+        showToast(`已催收 ${name}`);
+    };
+
+    window.saveConfig = async () => {
+        config.adminUser = document.getElementById("admin-select").value;
+        await setDoc(doc(db, "artifacts", APP_ID, "public", "data", "pool_config", "main"), config);
+        showToast("设置已保存并同步");
+        checkAdminAndUpdateUI();
+    };
+    window.updateAdmin = () => {
+        config.adminUser = document.getElementById("admin-select").value;
+        checkAdminAndUpdateUI();
+    };
+    window.setMyName = () => {
+        myName = document.getElementById("myname-select").value;
+        localStorage.setItem("myName", myName);
+        checkAdminAndUpdateUI();
+    };
+
+    // ====================== 订阅 & 启动 ======================
+    function subscribeData() {
+        const recordsRef = collection(db, "artifacts", APP_ID, "public", "data", "pool_records");
+        const configRef = doc(db, "artifacts", APP_ID, "public", "data", "pool_config", "main");
+
+        onSnapshot(recordsRef, (snap) => {
+            records = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.timestamp - a.timestamp);
+            computeBalances();
+            renderAll();
+        });
+
+        onSnapshot(configRef, (snap) => {
+            if (snap.exists()) config = snap.data();
+            updateConfigUI();
+            computeBalances();
+            renderAll();
+            checkAdminAndUpdateUI();
+        });
+    }
+
+    async function startApp() {
+        try { await signInAnonymously(auth); } catch(e) {}
+        onAuthStateChanged(auth, () => {
+            document.getElementById("loading-screen").classList.add("hidden");
+            document.getElementById("main-app").classList.remove("hidden");
+            subscribeData();
+            switchTab("dashboard");
+        });
+    }
+
+    function bindForms() {
+        document.getElementById("expense-form").addEventListener("submit", handleExpense);
+        document.getElementById("round-form").addEventListener("submit", handleRound);
+        document.getElementById("payment-form").addEventListener("submit", handlePayment);
+        document.getElementById("refund-form").addEventListener("submit", handleRefund);
+        document.getElementById("pad-form").addEventListener("submit", handlePad);
+        document.getElementById("reimburse-form").addEventListener("submit", handleReimburse);
+    }
+
+    // 全局暴露
+    window.showExpenseModal = window.showExpenseModal;
+    window.closeExpenseModal = window.closeExpenseModal;
+    window.showRoundModal = window.showRoundModal;
+    window.closeRoundModal = window.closeRoundModal;
+    window.openPaymentModal = window.openPaymentModal;
+    window.closePaymentModal = window.closePaymentModal;
+    window.openRefundModal = window.openRefundModal;
+    window.closeRefundModal = window.closeRefundModal;
+    window.showPadModal = window.showPadModal;
+    window.closePadModal = window.closePadModal;
+    window.showReimburseModal = window.showReimburseModal;
+    window.closeReimburseModal = window.closeReimburseModal;
+    window.quickReimburse = window.quickReimburse;
+    window.deleteRecord = window.deleteRecord;
+    window.remindUser = window.remindUser;
+    window.saveConfig = window.saveConfig;
+    window.updateAdmin = window.updateAdmin;
+    window.setMyName = window.setMyName;
+
+    window.onload = () => {
+        bindForms();
+        startApp();
+    };
+</script>
+</body>
+</html>
