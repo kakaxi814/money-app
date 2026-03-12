@@ -109,7 +109,7 @@
             <div id="history-list" class="space-y-4"></div>
         </div>
 
-        <!-- 报表 REPORTS 标签页（修复统计，退款不计入总支出） -->
+        <!-- 报表 REPORTS 标签页（修复统计，退款从总收入扣除） -->
         <div id="reports-tab" class="tab-content space-y-5">
             <!-- 时间筛选卡 -->
             <div class="bg-white rounded-3xl p-5 shadow-sm">
@@ -128,10 +128,10 @@
                     <button onclick="applyCustomRange()" class="col-span-2 bg-indigo-100 text-indigo-700 py-2 rounded-xl text-sm font-medium">应用</button>
                 </div>
 
-                <!-- 汇总卡片 (退款已从总支出中剔除) -->
+                <!-- 汇总卡片 (退款已从总收入中扣除) -->
                 <div class="grid grid-cols-2 gap-3 mt-4">
                     <div class="bg-indigo-50 p-4 rounded-2xl">
-                        <div class="text-xs text-indigo-500">总共拼钱</div>
+                        <div class="text-xs text-indigo-500">总共拼钱 (净入账)</div>
                         <div class="text-2xl font-bold" id="report-total-in">0.00</div>
                     </div>
                     <div class="bg-rose-50 p-4 rounded-2xl">
@@ -382,15 +382,15 @@
         try { await fetch(`https://api.telegram.org/bot${config.tgToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: config.tgChatId, text: fullText }) }); } catch (e) {}
     }
 
-    // ====================== 渲染报表（修复：退款不计入总支出） ======================
+    // ====================== 渲染报表（修复：退款从总收入中扣除） ======================
     function renderReports() {
         let filtered = records;
         if (reportStart && reportEnd) {
             filtered = records.filter(r => r.timestamp >= reportStart && r.timestamp <= reportEnd);
         }
 
-        let totalIn = 0;                // 拼钱入账 (contribution)
-        let totalOut = 0;               // 实际支出 (expense + reimbursement) 不含退款
+        let totalIn = 0;                // 净入账 = contribution - refund
+        let totalOut = 0;               // 实际支出 (expense + reimbursement)
         let catMap = {};
         const dailyMap = new Map();
 
@@ -402,6 +402,10 @@
             if (r.type === 'contribution') {
                 totalIn += amt;
                 dayData.in += amt;
+            } else if (r.type === 'refund') {
+                // 退款从总收入中扣除
+                totalIn -= amt;
+                dayData.in -= amt;
             } else if (r.type === 'expense') {
                 totalOut += amt;
                 dayData.out += amt;
@@ -413,7 +417,8 @@
             } else if (r.type === 'pad') {
                 dayData.pad += amt;
             }
-            // 注意：refund 不加入 totalOut 和 dayData.out，但会影响余额（下面单独计算净额）
+            // 其他类型忽略
+
             dailyMap.set(date, dayData);
         });
 
@@ -422,8 +427,6 @@
         document.getElementById('report-total-out').innerText = totalOut.toFixed(2);
         const totalPadOwed = Object.values(padOwedMap).reduce((a,b)=>a+b,0);
         document.getElementById('report-pad-out').innerText = totalPadOwed.toFixed(2);
-        // 余额 = 收入-支出 (期间净流入，但退款已从池中扣除，所以净额应该为 totalIn - totalOut - 期间退款？)
-        // 但用户可能更关心当前余额，而不是期间净额，我们用当前全局余额代替
         document.getElementById('report-net').innerText = poolBalance.toFixed(2);
 
         // 支出分类条形图
@@ -455,7 +458,7 @@
             sortedDays.forEach(([date, {in:din, out:dout, pad:dpad}]) => {
                 html += `<div class="flex justify-between items-center border-b pb-1">
                     <span class="text-gray-500 text-xs">${date}</span>
-                    <span class="text-emerald-600 text-xs">+${din.toFixed(2)}</span>
+                    <span class="text-emerald-600 text-xs">${din >= 0 ? '+' : ''}${din.toFixed(2)}</span>
                     <span class="text-red-500 text-xs">-${dout.toFixed(2)}</span>
                     ${dpad > 0 ? `<span class="text-violet-500 text-xs">垫${dpad.toFixed(2)}</span>` : '<span class="text-xs"></span>'}
                 </div>`;
